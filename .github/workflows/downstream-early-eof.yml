@@ -1,0 +1,38 @@
+name: Downstream early-EOF qualification
+on:
+  push:
+    branches: [downstream/macos27-early-eof-2.105.0]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: downstream-nio-eof-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  linux-selector:
+    runs-on: ubuntu-24.04
+    container:
+      image: swift@sha256:23d9b28ad97fb1cf1999edc3a0cb265ee915ed42299a9344e7173d5a6d2b05f4
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - run: swift --version
+      - name: NIOPosix regression tests
+        run: swift test --filter NIOPosixTests
+  macos-27:
+    # This job requires a runner explicitly registered for the fork.
+    # A skipped job does not qualify the patch on macOS 27.
+    if: >-
+      vars.HAS_MACOS27_RUNNER == 'true' &&
+      (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: [self-hosted, macOS, macos-27]
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - run: bash scripts/verify-macos27-early-eof.sh
