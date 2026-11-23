@@ -67,10 +67,20 @@ fi
 {
   echo "expected_scenarios=$EXPECTED"
   echo "recorded_scenarios=$ACTUAL"
-  awk -F '\t' 'NR>1 { status[$21]++; if ($8+0>0) spurious[$1 "|" $2 "|" $3]++ }
+  awk -F '\t' 'NR>1 {
+      status[$21]++;
+      k=$1 "|" $2 "|" $3;
+      cases[k]++;
+      if ($8+0>0) spurious[k]++;
+      if ($14+0>0) eof_without_recv[k]++;
+      if ($16+0>0) eof_after_drain[k]++;
+      if ($10+0>0 || $17+0>0) capped[k]++;
+      if ($3=="full" && $6+0<$5+0) fullness_unknown[k]++;
+    }
     END {
       for (s in status) print "status " s "=" status[s];
-      for (s in spurious) print "preclose_non_eof " s "=" spurious[s];
+      for (k in cases)
+        print "case " k " total=" cases[k] " pre_nonEOF=" (spurious[k]+0) " no_recv_EOF=" (eof_without_recv[k]+0) " post_drain_EOF=" (eof_after_drain[k]+0) " capped=" (capped[k]+0) " full_unconfirmed=" (fullness_unknown[k]+0);
     }' "$OUT/results.tsv" | sort
 } >"$OUT/summary.txt"
 
