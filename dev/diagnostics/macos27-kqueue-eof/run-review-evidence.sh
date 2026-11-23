@@ -41,21 +41,24 @@ test -z "$(git status --porcelain)"
 
 FILTER='testIPv4PeerEOFArrivesWithAutoReadDisabledOnMacOS27|testIPv6PeerEOFArrivesWithAutoReadDisabledOnMacOS27|testEarlyEOFEligibilityIncludesIPv4AndIPv6ButNotUnixOrMissingAddress'
 
+GATE_FAILURES=0
 echo "=== Reviewer IPv4 / IPv6 / address-family checks, Debug ==="
-swift test -j 2 --filter "$FILTER" >"$OUT/swiftnio-debug.log" 2>&1 || {
-  tail -n 80 "$OUT/swiftnio-debug.log" >&2; exit 1;
-}
+if ! swift test -j 2 --filter "$FILTER" >"$OUT/swiftnio-debug.log" 2>&1; then
+  tail -n 80 "$OUT/swiftnio-debug.log" >&2
+  GATE_FAILURES=$(( GATE_FAILURES + 1 ))
+fi
 
 echo "=== Same tests, optimized Release ==="
-swift test -c release -j 2 --filter "$FILTER" >"$OUT/swiftnio-release.log" 2>&1 || {
-  tail -n 80 "$OUT/swiftnio-release.log" >&2; exit 1;
-}
+if ! swift test -c release -j 2 --filter "$FILTER" >"$OUT/swiftnio-release.log" 2>&1; then
+  tail -n 80 "$OUT/swiftnio-release.log" >&2
+  GATE_FAILURES=$(( GATE_FAILURES + 1 ))
+fi
 
 for mode in debug release; do
   for name in testIPv4PeerEOFArrivesWithAutoReadDisabledOnMacOS27 testIPv6PeerEOFArrivesWithAutoReadDisabledOnMacOS27; do
     if ! grep -Fq "$name" "$OUT/swiftnio-$mode.log"; then
       echo "No evidence that $name executed in $mode" >&2
-      exit 1
+      GATE_FAILURES=$(( GATE_FAILURES + 1 ))
     fi
   done
 done
@@ -67,11 +70,14 @@ xcrun swift-format lint --strict \
   Tests/NIOPosixTests/SocketChannelTest.swift \
   Tests/NIOPosixTests/SyscallAbstractionLayer.swift \
   >"$OUT/swift-format.log" 2>&1 || {
-    cat "$OUT/swift-format.log" >&2; exit 1;
+    cat "$OUT/swift-format.log" >&2
+    GATE_FAILURES=$(( GATE_FAILURES + 1 ))
   }
 
 test "$(git rev-parse HEAD)" = "$PR_SHA"
 test -z "$(git status --porcelain)"
+printf 'pr_gate_failures=%s
+' "$GATE_FAILURES" > "$OUT/gate-status.txt"
 
 tar -czf "$OUT.tar.gz" -C "$(dirname "$OUT")" "$(basename "$OUT")"
 shasum -a 256 "$OUT.tar.gz" >"$OUT.sha256"
@@ -82,7 +88,11 @@ git switch --detach "$DIAG_SHA"
 test "$(git rev-parse HEAD)" = "$DIAG_SHA"
 test -z "$(git status --porcelain)"
 
-bash dev/diagnostics/macos27-kqueue-eof/run.sh 3
+if ! bash dev/diagnostics/macos27-kqueue-eof/run.sh 3; then
+  GATE_FAILURES=$(( GATE_FAILURES + 1 ))
+fi
 
 echo "=== Targeted maintainer tests and raw kernel diagnostic finished ==="
 echo "NOTE: existing full NIOPosix saturation test remains a known RED gate until fixed."
+echo "Newly executed reviewer/diagnostic gate failures: $GATE_FAILURES"
+if (( GATE_FAILURES > 0 )); then exit 1; fi
