@@ -76,8 +76,7 @@ xcrun swift-format lint --strict \
 
 test "$(git rev-parse HEAD)" = "$PR_SHA"
 test -z "$(git status --porcelain)"
-printf 'pr_gate_failures=%s
-' "$GATE_FAILURES" > "$OUT/gate-status.txt"
+echo "pr_gate_failures=$GATE_FAILURES" > "$OUT/gate-status.txt"
 
 tar -czf "$OUT.tar.gz" -C "$(dirname "$OUT")" "$(basename "$OUT")"
 shasum -a 256 "$OUT.tar.gz" >"$OUT.sha256"
