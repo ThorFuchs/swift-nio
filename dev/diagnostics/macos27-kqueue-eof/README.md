@@ -17,6 +17,38 @@ high-water mark (so_rcv.sb_hiwat), and the same routine serves EVFILT_EXCEPT on 
 does not guarantee that a filled buffer can never trigger raw EXCEPT readiness. The exact running
 macOS 27 beta kernel source has not been byte-verified against that public XNU source.
 
+## TCP saturation correction (second diagnostic revision)
+
+**Why this separate revision exists:** The first native proof archive from the Mac Studio
+(`SwiftNIO-KQueue-Proof-20261123T154814Z.tar.gz`, SHA-256
+`c7adf689dee570555807173eab6ac4dbfed80a95d48c6da073baef6dfebaf40b`)
+contained **72/72** executed scenarios and 48/48 IPv4/IPv6 pre-drain close notifications
+with `EV_EOF`. However the original diagnostic itself forced `SO_RCVBUF=8192`
+for **TCP** and stopped after `FIONREAD` reached that value: TCP "full" rows
+recorded only 8,704–11,264 queued bytes. The original SwiftNIO full-suite
+failure instead reported raw EXCEPT events carrying approximately **409,092–
+427,047** queued bytes on connected IPv4 TCP under a prolonged non-reading
+sender test. Therefore the first archive cannot establish that TCP is free from
+spurious EXCEPT events **at the failing saturation regime**.
+
+This updated diagnostic **preserves the native macOS TCP SO_RCVBUF and
+SO_SNDBUF**, sends bulk bytes until `FIONREAD >= SO_RCVBUF`, then attempts
+up to **20,000 additional single-byte sends** with no receiver reads.
+The send phase is bounded to 2.5 seconds; it may finish earlier or fail to
+reach the desired queue depth. UDS retains its original 8 KiB control buffer,
+and every other output field and EOF/FIN/RST observation remains available.
+
+**Do not call a row "fully saturated" solely because `FIONREAD` reaches
+`SO_RCVBUF`: Darwin may autogrow buffers or have a distinct internal
+`sb_hiwat`. Record `queued_preclose`, `recv_capacity`, `bytes_sent`,
+`pre_non_eof`, and `pre_capped` together, and compare with the original
+SwiftNIO failing event size (~409 KB). A clean row below that depth is
+*inconclusive*.**
+
+The original branch `diagnostic/macos27-kqueue-matrix-2026-11-23` and the
+uploaded first archive are retained unchanged. This branch is still a
+**diagnostic only**, not a fix or a new public API.
+
 ## Goals, not assertions to be weakened
 
 1. **IPv4 and IPv6:** Compare no-read EOF on connected TCP with empty and small unread queues.
