@@ -49,6 +49,56 @@ The original branch `diagnostic/macos27-kqueue-matrix-2026-11-23` and the
 uploaded first archive are retained unchanged. This branch is still a
 **diagnostic only**, not a fix or a new public API.
 
+## Live concurrent TCP saturation — third diagnostic, not a code fix
+
+The operator's second archive (native TCP buffer sizes, `d070401a...`)
+is `SwiftNIO-KQueue-Proof-20261123T160626Z.tar.gz`,
+SHA-256 `1cb8ae394bae1653635507e97e4a344e7b1a179b4077c74237beed8eee9df307`.
+It contains exactly **72/72** rows from macOS 27.3, Xcode 27.2, Apple clang 21.0.0:
+
+- **TCP IPv4+IPv6:** 48/48 cases observed raw EOF after peer close, before any recv;
+  no pre-close spurious EXCEPT in these specific scenarios.
+- **UDS full receiver:** 6/6 cases produced pre-close EXCEPT; LEVEL hit the event cap,
+  EV_CLEAR produced one raw event.
+- **TCP full rows:** `SO_RCVBUF` was 132,792 IPv4 / 132,132 IPv6 bytes;
+  `FIONREAD` before close was **155,578–180,173 bytes**, still below the
+  **409,092–427,047 bytes** seen in the sporadic failing full SwiftNIO test.
+- More critically, the C probe finished all sender writes before beginning
+  its 180ms raw kqueue polling. The SwiftNIO regression continually writes
+  on a *different* EventLoop while its receiver's selector is polled.
+  The second C probe therefore did NOT reproduce the same temporal pattern.
+- All values refer to the raw kernel observation under the tested conditions,
+  not evidence that the underlying macOS 27 early EOF regression is closed.
+
+A third, deliberately **separate** standalone C test is now provided:
+
+    bash dev/diagnostics/macos27-kqueue-eof/run-live-stress.sh 3 1600
+
+This runs **24 real cases**: three repetitions × LEVEL/EV_CLEAR × IPv4/IPv6
+× default TCP receive window/explicit 512KiB requested SO_RCVBUF. One POSIX
+thread sends an initial SO_RCVBUF-sized block in bulk and then one byte per
+nonblocking send, while the main thread independently polls **raw**
+EVFILT_EXCEPT/NOTE_LOWAT with NO recv calls. The producer is stopped and
+joined before FIN, followed by no-read EOF observations and controlled
+draining to catch EOF which might be held behind outstanding TCP payload.
+
+The runner captures per-case `max_queued_during`, `bytes_sent`,
+`pre_non_eof`, `first_non_eof_data`, `max_non_eof_data`,
+`pre_event_cap`, `post_close_eof_seen`, `drain_eof_events`,
+`recv_eof` and `producer_errno`. **A case with fewer than 400k
+queued bytes remains below the SwiftNIO failing regime.** Reaching
+400k is a heuristic for comparable pressure, NOT proof the internal
+socket buffer is at the same watermark. LEVEL after FIN can yield
+many repeats and should not be counted as a pre-close spurious event.
+Even 24 green diagnostic cases do not remove the *intermittent* full
+SwiftNIO regression. Use more runs / a full NIO test only after
+the precise mechanism is understood.
+
+**This new C probe and runner have been authored but are not yet
+compiled or executed on macOS.** If compilation fails, fix the diagnostic;
+it is not a SwiftNIO production-code failure. This branch must not be
+merged into the upstream PR.
+
 ## Goals, not assertions to be weakened
 
 1. **IPv4 and IPv6:** Compare no-read EOF on connected TCP with empty and small unread queues.
