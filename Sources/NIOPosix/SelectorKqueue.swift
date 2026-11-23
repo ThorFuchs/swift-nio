@@ -88,10 +88,23 @@ extension KQueueEventFilterSet {
             (KQueueEventFilterSet.read, EVFILT_READ), (.write, EVFILT_WRITE), (.except, EVFILT_EXCEPT),
         ] {
             if let flags = calculateKQueueChange(event: event) {
+                #if canImport(Darwin)
+                // DIAGNOSTIC ONLY: Experiment with edge-triggered EVFILT_EXCEPT to
+                // measure spurious wakeups at a full TCP receive buffer.
+                // Do not merge upstream without EOF-after-buffer-full coverage.
+                let effectiveFlags: UInt16
+                if filter == EVFILT_EXCEPT && flags == UInt16(EV_ADD) {
+                    effectiveFlags = flags | UInt16(EV_CLEAR)
+                } else {
+                    effectiveFlags = flags
+                }
+                #else
+                let effectiveFlags = flags
+                #endif
                 kevents.appendEvent(
                     fileDescriptor: fileDescriptor,
                     filter: filter,
-                    flags: flags,
+                    flags: effectiveFlags,
                     registrationID: registrationID
                 )
             }
