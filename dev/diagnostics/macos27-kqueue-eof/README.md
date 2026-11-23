@@ -44,7 +44,16 @@ from a small number of trials.
 
 ## Mac Studio usage
 
-Run in a detached checkout of this **diagnostic** branch:
+**One-command reviewer evidence:** In a clean detached checkout of this diagnostic branch,
+run the orchestrator below. It temporarily checks out the exact upstream PR SHA,
+runs the explicitly requested IPv4, IPv6 and address-family tests in Debug and optimized
+Release, checks the four changed Swift files with strict formatter lint, and then
+restores the diagnostic SHA and runs the independent kernel matrix. It does **not**
+run or greenwash the already known failing full NIOPosix saturation case.
+
+    bash dev/diagnostics/macos27-kqueue-eof/run-review-evidence.sh
+
+For the **standalone kernel matrix only**, run:
 
     bash dev/diagnostics/macos27-kqueue-eof/run.sh 3
 
