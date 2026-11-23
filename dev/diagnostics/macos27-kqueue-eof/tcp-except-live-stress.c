@@ -205,7 +205,8 @@ static void run(int family,bool larger,bool clear,int rep,int duration_ms) {
     atomic_init(&producer.sent,0);
     atomic_init(&producer.error,0);
     pthread_t thread;
-    if(pthread_create(&thread,NULL,produce,&producer)!=0) die("pthread_create");
+    int prc=pthread_create(&thread,NULL,produce,&producer);
+    if(prc!=0) {errno=prc;die("pthread_create");}
 
     Observation before={0},after={0},drain={0};
     // Kernel watches EXCEPT while the peer continuously sends, no receiver reads.
@@ -232,7 +233,7 @@ static void run(int family,bool larger,bool clear,int rep,int duration_ms) {
     else if(before.non_eof>0) state="SPURIOUS_EXCEPT";
     else if(before.max_queued<400000) state="BELOW_400K";
     printf("%s\t%s\t%s\t%d\t%d\t%d\t%d\t%" PRIu64 "\t%d\t%d\t%" PRIu64
-        "\t%" PRIu64 "\t%" PRIu64 "\t%" PRId64 "\t%" PRId64 "\t%u\t%d"
+        "\t%" PRIu64 "\t%" PRId64 "\t%" PRId64 "\t%u\t%d"
         "\t%" PRIu64 "\t%" PRIu64 "\t%zu\t%d\t%d\t%s\n",
         clear?"EV_CLEAR":"LEVEL",
         family==AF_INET?"ipv4":"ipv6",
