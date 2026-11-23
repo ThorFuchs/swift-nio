@@ -57,11 +57,17 @@ static void nonblocking(int fd) {
     if (flags < 0 || fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0) fail("fcntl O_NONBLOCK");
 }
 
-static void tune(int receiver, int sender) {
-    int rcv = 8192;
-    int snd = 16384;
-    if (setsockopt(receiver, SOL_SOCKET, SO_RCVBUF, &rcv, sizeof(rcv)) < 0) fail("SO_RCVBUF");
-    if (setsockopt(sender, SOL_SOCKET, SO_SNDBUF, &snd, sizeof(snd)) < 0) fail("SO_SNDBUF");
+static void tune(int receiver, int sender, bool isTCP) {
+    // CRITICAL: preserve macOS's native TCP SO_RCVBUF/SO_SNDBUF settings.
+    // The 2026-11-23 probe forced TCP SO_RCVBUF to 8 KiB and could therefore
+    // not reproduce NIO's spurious EVFILT_EXCEPT at approximately 409 KiB.
+    // Keep UDS deliberately small to preserve the independent UDS control.
+    if (!isTCP) {
+        int rcv = 8192;
+        int snd = 16384;
+        if (setsockopt(receiver, SOL_SOCKET, SO_RCVBUF, &rcv, sizeof(rcv)) < 0) fail("SO_RCVBUF");
+        if (setsockopt(sender, SOL_SOCKET, SO_SNDBUF, &snd, sizeof(snd)) < 0) fail("SO_SNDBUF");
+    }
     nonblocking(receiver);
     nonblocking(sender);
 }
@@ -114,7 +120,7 @@ static SocketPair connect_tcp(int family) {
     p.receiver = accept(listener, NULL, NULL);
     if (p.receiver < 0) fail("accept");
     if (close(listener) < 0) fail("close listener");
-    tune(p.receiver, p.sender);
+    tune(p.receiver, p.sender, true);
     return p;
 }
 
@@ -122,7 +128,7 @@ static SocketPair connect_uds(void) {
     int fds[2];
     if (socketpair(AF_UNIX, SOCK_STREAM, 0, fds) < 0) fail("socketpair AF_UNIX");
     SocketPair p = {.sender = fds[0], .receiver = fds[1]};
-    tune(p.receiver, p.sender);
+    tune(p.receiver, p.sender, false);
     return p;
 }
 
@@ -169,24 +175,31 @@ static size_t fill_receiver(SocketPair p, int capacity) {
     unsigned char bytes[8192];
     memset(bytes, 'X', sizeof(bytes));
     size_t sent = 0;
-    int64_t deadline = millis() + 1200;
-    // Report BOTH actual FIONREAD and socket capacity: merely sending enough
-    // bytes does not prove the remote receive buffer is full.
+    size_t after_capacity_one_byte_sends = 0;
+    bool reached_capacity = false;
+    int64_t deadline = millis() + 2500;
+    // Match NIO's regression profile: queue an SO_RCVBUF-sized bulk write,
+    // then keep sending ONE byte at a time without reading the receiver.
+    // FIONREAD is a heuristic, not proof of the kernel's internal sb_hiwat.
+    // If send buffers are full, time out and record the shortfall.
     while (millis() < deadline && sent < FILL_BYTE_CAP) {
-        size_t request = sent == 0 ? sizeof(bytes) : 512;
+        if (!reached_capacity && queued_bytes(p.receiver) >= capacity) {
+            reached_capacity = true;
+        }
+        if (reached_capacity && after_capacity_one_byte_sends >= 20000) {
+            break;
+        }
+        size_t request = reached_capacity ? 1 : sizeof(bytes);
         ssize_t n = send(p.sender, bytes, request, 0);
         if (n > 0) {
             sent += (size_t)n;
+            if (reached_capacity) after_capacity_one_byte_sends += (size_t)n;
         } else if (n == -1 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
             sleep_ms(2);
         } else if (n == -1 && errno == EINTR) {
             continue;
         } else {
-            fail("nonblocking fill send");
-        }
-        if (queued_bytes(p.receiver) >= capacity) {
-            sleep_ms(10);
-            break;
+            fail("nonblocking saturation send");
         }
     }
     return sent;
